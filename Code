@@ -1,0 +1,117 @@
+# Importing the dataset
+house_data <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQhIE8Ii658C4Ex4BXo2kKfzZHLh3Bt84UqDUXL7wviqmIRN98RzvW9pX7jTywwzuwcvbElB4y31yAW/pub?gid=1950240221&single=true&output=csv", stringsAsFactors = TRUE)
+
+class(house_data$Rent)
+house_data$Rent <- as.numeric(house_data$Rent)
+
+# Count the number of houses in Hyderabad
+hyderabad_houses <- subset(house_data, City == "Hyderabad")
+nrow(hyderabad_houses)
+
+# Find mean, median, minimum, and maximum of Rent variable
+mean_rent <- mean(house_data$Rent, na.rm = TRUE)
+median_rent <- median(house_data$Rent, na.rm = TRUE)
+min_rent <- min(house_data$Rent, na.rm = TRUE)
+max_rent <- max(house_data$Rent, na.rm = TRUE)
+
+# Print results
+cat("Mean Rent: ", mean_rent, "\n")
+cat("Median Rent: ", median_rent, "\n")
+cat("Minimum Rent: ", min_rent, "\n")
+cat("Maximum Rent: ", max_rent, "\n")
+
+# Count number of levels and observations for Point of Contact 
+contact_levels <- table(house_data$Point.of.Contact)
+contact_levels
+
+#No Contact Builder
+house_data <- subset(house_data, Point.of.Contact != "Contact Builder")
+
+#dummy variable for Point of Contact
+house_data$contact_dummy <- ifelse(house_data$Point.of.Contact == "Contact Agent", 1, 0)
+
+#verify the changes
+head(house_data)
+house_data[8, ]
+
+# Furnishing_Dummy
+house_data$Furnishing_Dummy <- as.numeric(ifelse(house_data$Furnishing.Status == "Furnished", 2, 
+                                                 ifelse(house_data$Furnishing.Status == "Semi-Furnished", 1, 0)))
+#the levels of Furnishing Status 
+levels(house_data$Furnishing.Status)
+head(house_data)
+house_data[13, ]
+
+
+
+
+#Analysis 
+
+#Q1
+install.packages("Matching")
+install.packages("rgenoud")
+library(Matching)
+library(rgenoud)
+
+set.seed(130)
+#linear regression 
+X <- cbind(house_data$BHK, house_data$Size, house_data$Furnishing.Status, house_data$Bathroom)
+colnames(X) <- c("BHK", "Size", "Furnishing.Status", "Bathroom")
+lm1 <- lm(formula = house_data$Rent ~ house_data$contact_dummy + X)
+summary(lm1)
+
+
+
+#Q2 
+#genematching
+genout <- GenMatch(Tr=house_data$contact_dummy, X=X, estimand="ATT", M=1, pop.size=50, max.generations=10, wait.generations=10)
+
+mout <- Match(Tr=house_data$contact_dummy, X=X, caliper = 0.4, M=1, estimand="ATT", Weight.matrix=genout) 
+summary(mout)
+
+mb <- MatchBalance(house_data$contact_dummy ~ X, match.out=mout, nboots=500)
+
+
+#Q3 
+#genematch with Y variable 
+genout <- GenMatch(Tr=house_data$contact_dummy, X=X, estimand="ATT", M=1, pop.size=50, max.generations=10, wait.generations=10)
+
+mout <- Match(Y= house_data$Rent, Tr=house_data$contact_dummy, X=X, caliper = 0.4, M=1, estimand="ATT", Weight.matrix=genout) 
+summary(mout)
+
+mb <- MatchBalance(house_data$contact_dummy ~ X, match.out=mout, nboots=500)
+
+#Q4 
+#new linear regression with new weigths 
+matched_data <- house_data[c(mout$index.treated, mout$index.control), ]
+weights <- mout$weights
+new_weights <- rep(weights, 2)
+lm2 <- lm(formula = Rent ~ contact_dummy + BHK + Size + Furnishing_Dummy + Bathroom, data = matched_data, weights = new_weights)
+summary(lm2)
+
+#Q4Rerun (different code for check)
+matched_data <- house_data[c(mout$index.treated, mout$index.control), ]
+weights <- c(mout$weights, mout$weights)
+lm2 <- lm(formula = Rent ~ contact_dummy + BHK + Size + Furnishing_Dummy + Bathroom, data = matched_data, weights = weights)
+summary(lm2)
+
+
+#Q5 
+install.packages("sensemakr")
+library(sensemakr)
+kd_range <- c(1, 2, 3)
+benchmark_var <- "Size"
+sens_lm2 <- sensemakr(lm2, benchmark_var = "Size", kd = kd_range, treatment = "contact_dummy")
+plot(sens_lm2)
+
+#Q5 Rerun (different code form to ensure model correctness)
+install.packages("sensemakr")
+library(sensemakr)
+
+rent_sensitivity <- sensemakr(model = lm2, 
+                              treatment = "contact_dummy",
+                              benchmark_covariates = "Size",
+                              kd = 1:3)
+
+rent_sensitivity
+plot(rent_sensitivity)
